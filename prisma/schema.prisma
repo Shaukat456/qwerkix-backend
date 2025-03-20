@@ -1,0 +1,305 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// User entity with enhanced security and audit
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  name          String
+  password      String    // Stored as bcrypt hash
+  role          UserRole  @default(USER)
+  status        UserStatus @default(ACTIVE)
+  failedLogins  Int       @default(0)
+  lastLoginAt   DateTime?
+  tasks         Task[]
+  projects      Project[]
+  teamMemberships TeamMember[]
+  auditLogs     AuditLog[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime? // Soft delete
+
+  @@index([email])
+  @@map("users")
+}
+
+// Project entity with hierarchical structure
+model Project {
+  id            String    @id @default(uuid())
+  name          String
+  description   String?   @db.Text
+  status        ProjectStatus @default(ACTIVE)
+  priority      Priority    @default(MEDIUM)
+  startDate     DateTime
+  endDate       DateTime?
+  budget        Decimal?    @db.Decimal(10, 2)
+  parentId      String?     // For sub-projects
+  parent        Project?    @relation("ProjectHierarchy", fields: [parentId], references: [id])
+  subProjects   Project[]   @relation("ProjectHierarchy")
+  tasks         Task[]
+  owner         User        @relation(fields: [ownerId], references: [id])
+  ownerId       String
+  team          TeamMember[]
+  documents     Document[]
+  milestones    Milestone[]
+  tags          ProjectTag[]
+  auditLogs     AuditLog[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  deletedAt     DateTime?   // Soft delete
+
+  @@index([ownerId])
+  @@index([status])
+  @@map("projects")
+}
+
+// Task entity with advanced tracking
+model Task {
+  id            String    @id @default(uuid())
+  title         String
+  description   String?   @db.Text
+  status        TaskStatus @default(PENDING)
+  priority      Priority   @default(MEDIUM)
+  estimatedHours Float?
+  actualHours    Float?
+  startDate     DateTime?
+  dueDate       DateTime?
+  completedAt   DateTime?
+  project       Project    @relation(fields: [projectId], references: [id])
+  projectId     String
+  assignee      User       @relation(fields: [assigneeId], references: [id])
+  assigneeId    String
+  dependencies  TaskDependency[] @relation("DependentTask")
+  dependentOn   TaskDependency[] @relation("ParentTask")
+  comments      Comment[]
+  attachments   Attachment[]
+  timeEntries   TimeEntry[]
+  tags          TaskTag[]
+  auditLogs     AuditLog[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime? // Soft delete
+
+  @@index([projectId])
+  @@index([assigneeId])
+  @@index([status])
+  @@map("tasks")
+}
+
+// Team management with role-based access
+model TeamMember {
+  id        String      @id @default(uuid())
+  user      User        @relation(fields: [userId], references: [id])
+  userId    String
+  project   Project     @relation(fields: [projectId], references: [id])
+  projectId String
+  role      TeamRole    @default(MEMBER)
+  joinedAt  DateTime    @default(now())
+  leftAt    DateTime?
+
+  @@unique([userId, projectId])
+  @@map("team_members")
+}
+
+// Document management with versioning
+model Document {
+  id            String    @id @default(uuid())
+  name          String
+  type          String
+  path          String
+  size          Int
+  version       Int       @default(1)
+  project       Project   @relation(fields: [projectId], references: [id])
+  projectId     String
+  previousVersion String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([projectId])
+  @@map("documents")
+}
+
+// Task dependencies tracking
+model TaskDependency {
+  id            String    @id @default(uuid())
+  parentTask    Task      @relation("ParentTask", fields: [parentTaskId], references: [id])
+  parentTaskId  String
+  dependentTask Task      @relation("DependentTask", fields: [dependentTaskId], references: [id])
+  dependentTaskId String
+  type          DependencyType
+  createdAt     DateTime  @default(now())
+
+  @@unique([parentTaskId, dependentTaskId])
+  @@map("task_dependencies")
+}
+
+// Time tracking
+model TimeEntry {
+  id          String    @id @default(uuid())
+  task        Task      @relation(fields: [taskId], references: [id])
+  taskId      String
+  startTime   DateTime
+  endTime     DateTime?
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([taskId])
+  @@map("time_entries")
+}
+
+// Project milestones
+model Milestone {
+  id          String    @id @default(uuid())
+  title       String
+  description String?
+  dueDate     DateTime
+  project     Project   @relation(fields: [projectId], references: [id])
+  projectId   String
+  status      MilestoneStatus @default(PENDING)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([projectId])
+  @@map("milestones")
+}
+
+// Audit logging
+model AuditLog {
+  id          String    @id @default(uuid())
+  action      String
+  entityType  String
+  entityId    String
+  user        User      @relation(fields: [userId], references: [id])
+  userId      String
+  project     Project?  @relation(fields: [projectId], references: [id])
+  projectId   String?
+  task        Task?     @relation(fields: [taskId], references: [id])
+  taskId      String?
+  oldData     Json?
+  newData     Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+// Comments with threading
+model Comment {
+  id          String    @id @default(uuid())
+  content     String    @db.Text
+  task        Task      @relation(fields: [taskId], references: [id])
+  taskId      String
+  parentId    String?
+  parent      Comment?  @relation("CommentThread", fields: [parentId], references: [id])
+  replies     Comment[] @relation("CommentThread")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([taskId])
+  @@map("comments")
+}
+
+// File attachments
+model Attachment {
+  id          String    @id @default(uuid())
+  name        String
+  path        String
+  size        Int
+  mimeType    String
+  task        Task      @relation(fields: [taskId], references: [id])
+  taskId      String
+  createdAt   DateTime  @default(now())
+
+  @@index([taskId])
+  @@map("attachments")
+}
+
+// Tags for projects and tasks
+model ProjectTag {
+  id          String    @id @default(uuid())
+  name        String
+  color       String
+  project     Project   @relation(fields: [projectId], references: [id])
+  projectId   String
+
+  @@unique([projectId, name])
+  @@map("project_tags")
+}
+
+model TaskTag {
+  id          String    @id @default(uuid())
+  name        String
+  color       String
+  task        Task      @relation(fields: [taskId], references: [id])
+  taskId      String
+
+  @@unique([taskId, name])
+  @@map("task_tags")
+}
+
+enum UserRole {
+  ADMIN
+  USER
+  MANAGER
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  LOCKED
+  PENDING_VERIFICATION
+}
+
+enum ProjectStatus {
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+  ON_HOLD
+  CANCELLED
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  BLOCKED
+  REVIEW
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TeamRole {
+  OWNER
+  MANAGER
+  MEMBER
+  VIEWER
+}
+
+enum DependencyType {
+  BLOCKS
+  REQUIRES
+  RELATES_TO
+}
+
+enum MilestoneStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  DELAYED
+}
